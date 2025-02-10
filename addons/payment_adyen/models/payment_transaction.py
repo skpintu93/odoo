@@ -40,6 +40,7 @@ class PaymentTransaction(models.Model):
             'access_token': payment_utils.generate_access_token(
                 processing_values['reference'],
                 converted_amount,
+                self.currency_id.id,
                 processing_values['partner_id']
             )
         }
@@ -459,6 +460,7 @@ class PaymentTransaction(models.Model):
                     self._log_message_on_linked_documents(_(
                         "The capture of the transaction with reference %s failed.", self.reference
                     ))
+        elif payment_state in const.RESULT_CODES_MAPPING['refused']:
             _logger.warning(
                 "the transaction with reference %s was refused. reason: %s",
                 self.reference, refusal_reason

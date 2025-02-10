@@ -24,7 +24,7 @@ class ChannelMember(models.Model):
     guest_id = fields.Many2one("mail.guest", "Guest", ondelete="cascade", index=True)
     is_self = fields.Boolean(compute="_compute_is_self", search="_search_is_self")
     # channel
-    channel_id = fields.Many2one("discuss.channel", "Channel", ondelete="cascade", required=True)
+    channel_id = fields.Many2one("discuss.channel", "Channel", ondelete="cascade", required=True, auto_join=True)
     # state
     custom_channel_name = fields.Char('Custom channel name')
     fetched_message_id = fields.Many2one('mail.message', string='Last Fetched', index="btree_not_null")
@@ -138,7 +138,11 @@ class ChannelMember(models.Model):
                 raise UserError(
                     _("Adding more members to this chat isn't possible; it's designed for just two people.")
                 )
-        return super().create(vals_list)
+        res = super().create(vals_list)
+        # help the ORM to detect changes
+        res.partner_id.invalidate_recordset(["channel_ids"])
+        res.guest_id.invalidate_recordset(["channel_ids"])
+        return res
 
     def write(self, vals):
         for channel_member in self:

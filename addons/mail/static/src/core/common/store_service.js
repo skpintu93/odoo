@@ -74,18 +74,7 @@ export class Store extends BaseStore {
     users = {};
     internalUserGroupId = null;
     imStatusTrackedPersonas = Record.many("Persona", {
-        compute() {
-            return Object.values(this.Persona?.records ?? []).filter(
-                (persona) =>
-                    persona.type === "partner" &&
-                    persona.im_status !== "im_partner" &&
-                    !persona.is_public
-            );
-        },
-        onUpdate() {
-            this.updateImStatusRegistration();
-        },
-        eager: true,
+        inverse: "storeAsTrackedImStatus",
     });
     hasLinkPreviewFeature = true;
     // messaging menu
@@ -124,46 +113,40 @@ export class Store extends BaseStore {
              *
              * In each group, thread with most recent message comes first
              */
-            if (a.correspondent?.eq(this.odoobot) && !b.correspondent?.eq(this.odoobot)) {
+            const aOdooBot = a.isCorrespondentOdooBot;
+            const bOdooBot = b.isCorrespondentOdooBot;
+            if (aOdooBot && !bOdooBot) {
                 return 1;
             }
-            if (b.correspondent?.eq(this.odoobot) && !a.correspondent?.eq(this.odoobot)) {
+            if (bOdooBot && !aOdooBot) {
                 return -1;
             }
-            if (a.needactionMessages.length > 0 && b.needactionMessages.length === 0) {
+            const aNeedaction = a.needactionMessages.length;
+            const bNeedaction = b.needactionMessages.length;
+            if (aNeedaction > 0 && bNeedaction === 0) {
                 return -1;
             }
-            if (b.needactionMessages.length > 0 && a.needactionMessages.length === 0) {
+            if (bNeedaction > 0 && aNeedaction === 0) {
                 return 1;
             }
-            if (a.message_unread_counter > 0 && b.message_unread_counter === 0) {
+            const aUnread = a.message_unread_counter;
+            const bUnread = b.message_unread_counter;
+            if (aUnread > 0 && bUnread === 0) {
                 return -1;
             }
-            if (b.message_unread_counter > 0 && a.message_unread_counter === 0) {
+            if (bUnread > 0 && aUnread === 0) {
                 return 1;
             }
-            if (
-                !a.newestPersistentNotEmptyOfAllMessage?.datetime &&
-                b.newestPersistentNotEmptyOfAllMessage?.datetime
-            ) {
+            const aMessageDatetime = a.newestPersistentNotEmptyOfAllMessage?.datetime;
+            const bMessageDateTime = b.newestPersistentNotEmptyOfAllMessage?.datetime;
+            if (!aMessageDatetime && bMessageDateTime) {
                 return 1;
             }
-            if (
-                !b.newestPersistentNotEmptyOfAllMessage?.datetime &&
-                a.newestPersistentNotEmptyOfAllMessage?.datetime
-            ) {
+            if (!bMessageDateTime && aMessageDatetime) {
                 return -1;
             }
-            if (
-                a.newestPersistentNotEmptyOfAllMessage?.datetime &&
-                b.newestPersistentNotEmptyOfAllMessage?.datetime &&
-                a.newestPersistentNotEmptyOfAllMessage?.datetime !==
-                    b.newestPersistentNotEmptyOfAllMessage?.datetime
-            ) {
-                return (
-                    b.newestPersistentNotEmptyOfAllMessage.datetime -
-                    a.newestPersistentNotEmptyOfAllMessage.datetime
-                );
+            if (aMessageDatetime && bMessageDateTime && aMessageDatetime !== bMessageDateTime) {
+                return bMessageDateTime - aMessageDatetime;
             }
             return b.localId > a.localId ? 1 : -1;
         },
@@ -197,40 +180,47 @@ export class Store extends BaseStore {
         return tab === "chat" ? ["chat", "group"] : [tab];
     }
 
-    setup() {
-        super.setup();
-        this.updateBusSubscription = debounce(this.updateBusSubscription, 0); // Wait for thread fully inserted.
+    handleClickOnLink(ev, thread) {
+        const model = ev.target.dataset.oeModel;
+        const id = Number(ev.target.dataset.oeId);
+        if (ev.target.closest(".o_channel_redirect") && model && id) {
+            ev.preventDefault();
+            const thread = this.Thread.insert({ model, id });
+            if (!thread.is_pinned) {
+                this.env.services["mail.thread"].fetchChannel(id).then(() => {
+                    this.env.services["mail.thread"].open(thread);
+                });
+                return true;
+            }
+            this.env.services["mail.thread"].open(thread);
+            return true;
+        } else if (ev.target.closest(".o_mail_redirect") && id) {
+            ev.preventDefault();
+            this.env.services["mail.thread"].openChat({ partnerId: id });
+            return true;
+        } else if (ev.target.tagName === "A" && model && id) {
+            ev.preventDefault();
+            Promise.resolve(
+                this.env.services.action.doAction({
+                    type: "ir.actions.act_window",
+                    res_model: model,
+                    views: [[false, "form"]],
+                    res_id: id,
+                })
+            ).then(() => this.onLinkFollowed(thread));
+            return true;
+        }
+        return false;
     }
 
-    updateBusSubscription() {
-        if (!this.isMessagingReady) {
-            return;
-        }
-        const allSelfChannelIds = new Set();
-        for (const thread of Object.values(this.Thread.records)) {
-            if (thread.model === "discuss.channel" && thread.hasSelfAsMember) {
-                if (thread.selfMember.memberSince < this.env.services["bus_service"].startedAt) {
-                    this.knownChannelIds.add(thread.id);
-                }
-                allSelfChannelIds.add(thread.id);
-            }
-        }
-        let shouldUpdateChannels = false;
-        for (const id of allSelfChannelIds) {
-            if (!this.knownChannelIds.has(id)) {
-                shouldUpdateChannels = true;
-                this.knownChannelIds.add(id);
-            }
-        }
-        for (const id of this.knownChannelIds) {
-            if (!allSelfChannelIds.has(id)) {
-                shouldUpdateChannels = true;
-                this.knownChannelIds.delete(id);
-            }
-        }
-        if (shouldUpdateChannels) {
-            this.env.services["bus_service"].forceUpdateChannels();
-        }
+    onLinkFollowed(fromThread) {}
+
+    setup() {
+        super.setup();
+        this.updateBusSubscription = debounce(
+            () => this.env.services.bus_service.forceUpdateChannels(),
+            0
+        );
     }
 }
 Store.register();
@@ -245,7 +235,6 @@ export const storeService = {
         const store = makeStore(env);
         store.discuss = {};
         store.discuss.activeTab = "main";
-        Record.onChange(store.Thread, "records", () => store.updateBusSubscription());
         services.ui.bus.addEventListener("resize", () => {
             store.discuss.activeTab = "main";
             if (

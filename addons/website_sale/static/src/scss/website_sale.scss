@@ -23,6 +23,12 @@ $input-border-color: $gray-400;
             width: if($-list, 100%, 50%);
         }
 
+        @if ($-list == false) {
+            [data-ppr="3"] td.oe_product {
+                width: 100%;
+            }
+        }
+
         .modal-dialog {
             table, tbody, tr, td {
                 display: revert;
@@ -40,27 +46,6 @@ $input-border-color: $gray-400;
                 }
             }
         }
-    }
-}
-
-@mixin o-wsale-scrollbar-subdle($-vertical: true) {
-    $-o-scrollbar-subdle-bg: rgba($dark, 0.05);
-
-    scrollbar-color: currentColor $-o-scrollbar-subdle-bg;
-    scrollbar#{if($-vertical, -width, -height)}: 2px;
-    cursor: grab;
-
-    &::-webkit-scrollbar {
-        #{if($-vertical, width, height)}: 2px;
-    }
-
-    &::-webkit-scrollbar-thumb {
-        border-radius: $btn-border-radius-sm;
-        background: currentColor;
-    }
-
-    &::-webkit-scrollbar-track {
-        background: $-o-scrollbar-subdle-bg;
     }
 }
 
@@ -104,7 +89,34 @@ $input-border-color: $gray-400;
     }
 
     .o_wsale_filmstip_container {
-        &:hover {
+        $-o-scrollbar-subdle-bg: rgba($dark, 0.05);
+
+        transform: translateZ(0);
+
+        &.o_wsale_filmstip_fancy_disabled {
+            scrollbar-color: currentColor $-o-scrollbar-subdle-bg;
+        }
+
+        .o_wsale_filmstip_wrapper {
+            margin-bottom: map-get($spacers, 2);
+            scroll-snap-type: x mandatory;
+            cursor: grab;
+
+            &::-webkit-scrollbar {
+                height: 2px;
+            }
+
+            &::-webkit-scrollbar-thumb {
+                border-radius: $btn-border-radius-sm;
+                background: currentColor;
+            }
+
+            &::-webkit-scrollbar-track {
+                background: $-o-scrollbar-subdle-bg;
+            }
+        }
+
+        &:not(.o_wsale_filmstip_fancy_disabled):hover {
             .o_wsale_filmstip_wrapper {
                 margin-bottom: map-get($spacers, 1);
 
@@ -112,16 +124,6 @@ $input-border-color: $gray-400;
                     height: 6px;
                 }
             }
-        }
-    }
-
-    .o_wsale_filmstip_wrapper {
-        margin-bottom: map-get($spacers, 2);
-        scroll-snap-type: x mandatory;
-        @include o-wsale-scrollbar-subdle($-vertical: false);
-
-        .o_wsale_filmstip {
-            transform: translateX(0);
         }
     }
 
@@ -187,10 +189,6 @@ $input-border-color: $gray-400;
     *:not(#product_attributes_simple) > .table-sm tbody td {
         padding-top: 0.75rem;
         padding-bottom: 0.75rem;
-    }
-
-    #o_wsale_offcanvas_content {
-        @include o-wsale-scrollbar-subdle();
     }
 
     #products_grid_before {
@@ -427,7 +425,8 @@ a.no-decoration {
     .carousel-outer {
         height: 400px;
         max-height: 90vh;
-
+        display: flex;
+        align-items: center;
         .carousel-inner {
             img {
                 object-fit: contain;
@@ -443,8 +442,8 @@ a.no-decoration {
     }
 
     .carousel-control-prev, .carousel-control-next {
-        height: 70%;
-        top: 15%;
+        top: auto;
+        bottom: auto;
         opacity: 0.5;
         cursor: pointer;
         transition: opacity 0.8s;
@@ -750,18 +749,19 @@ a.no-decoration {
     }
 
     .o_wsale_accordion {
-        .collapse:not(.show) {
-            display: block;
-
-            @include media-breakpoint-down(lg) {
-                display: none;
-            }
+        .accordion-button{
+            background-color: unset;
         }
 
         .o_wsale_scrollable_table {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+            &::-webkit-scrollbar {
+              display: none;
+            }
             @include media-breakpoint-up(lg) {
                 overflow-y: scroll;
-                height: 21rem;
+                height: 15rem;
             }
         }
     }
@@ -772,7 +772,7 @@ a.no-decoration {
         line-height: $headings-line-height;
     }
 
-    div[itemprop="address"] {
+    div[itemprop="address"],  .o_address_font_sm {
         margin: map-get($spacers, 2) 0;
         font-size: $font-size-sm;
     }
@@ -812,16 +812,17 @@ a.no-decoration {
     // bottom of the page.
     @include media-breakpoint-down(lg){
         .o_cta_navigation_container {
+            top: 100%;
+            bottom: auto !important;
             padding: 0 calc(var(--gutter-x) * .5);
         }
-    }
-
-    // TODO This height is arbitrary and the calculation should be improved.
-    .o_cta_navigation_placeholder {
-        height: o-to-rem(111px) + map-get($spacers, 4) + 2rem;
     }
 
     a.disabled {
         pointer-events: none;
     }
+}
+
+.accordion-button:not(.collapsed).bg-transparent::after {
+    background-image: escape-svg($accordion-button-icon);
 }

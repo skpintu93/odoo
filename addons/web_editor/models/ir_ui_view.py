@@ -9,14 +9,39 @@ from lxml import etree, html
 from odoo import api, models, _
 from odoo.osv import expression
 from odoo.exceptions import ValidationError
+from odoo.addons.base.models.ir_ui_view import MOVABLE_BRANDING
 
 _logger = logging.getLogger(__name__)
 
-EDITING_ATTRIBUTES = ['data-oe-model', 'data-oe-id', 'data-oe-field', 'data-oe-xpath', 'data-note-id']
+EDITING_ATTRIBUTES = MOVABLE_BRANDING + [
+    'data-oe-type',
+    'data-oe-expression',
+    'data-oe-translation-id',
+    'data-note-id'
+]
 
 
 class IrUiView(models.Model):
     _inherit = 'ir.ui.view'
+
+    def _get_cleaned_non_editing_attributes(self, attributes):
+        """
+        Returns a new mapping of attributes -> value without the parts that are
+        not meant to be saved (branding, editing classes, ...). Note that
+        classes are meant to be cleaned on the client side before saving as
+        mostly linked to the related options (so we are not supposed to know
+        which to remove here).
+
+        :param attributes: a mapping of attributes -> value
+        :return: a new mapping of attributes -> value
+        """
+        attributes = {k: v for k, v in attributes if k not in EDITING_ATTRIBUTES}
+        if 'class' in attributes:
+            classes = attributes['class'].split()
+            attributes['class'] = ' '.join([c for c in classes if c != 'o_editable'])
+        if attributes.get('contenteditable') == 'true':
+            del attributes['contenteditable']
+        return attributes
 
     #------------------------------------------------------
     # Save from html
@@ -44,19 +69,19 @@ class IrUiView(models.Model):
 
         try:
             value = converter.from_html(Model, Model._fields[field], el)
-        except ValueError:
+            if value is not None:
+                # TODO: batch writes?
+                record = Model.browse(int(el.get('data-oe-id')))
+                if not self.env.context.get('lang') and self.get_default_lang_code():
+                    record.with_context(lang=self.get_default_lang_code()).write({field: value})
+                else:
+                    record.write({field: value})
+
+                if callable(Model._fields[field].translate):
+                    self._copy_custom_snippet_translations(record, field)
+
+        except (ValueError, TypeError):
             raise ValidationError(_("Invalid field value for %s: %s", Model._fields[field].string, el.text_content().strip()))
-
-        if value is not None:
-            # TODO: batch writes?
-            record = Model.browse(int(el.get('data-oe-id')))
-            if not self.env.context.get('lang') and self.get_default_lang_code():
-                record.with_context(lang=self.get_default_lang_code()).write({field: value})
-            else:
-                record.write({field: value})
-
-            if callable(Model._fields[field].translate):
-                self._copy_custom_snippet_translations(record, field)
 
     def save_oe_structure(self, el):
         self.ensure_one()
@@ -68,7 +93,7 @@ class IrUiView(models.Model):
         arch = etree.Element('data')
         xpath = etree.Element('xpath', expr="//*[hasclass('oe_structure')][@id='{}']".format(el.get('id')), position="replace")
         arch.append(xpath)
-        attributes = {k: v for k, v in el.attrib.items() if k not in EDITING_ATTRIBUTES}
+        attributes = self._get_cleaned_non_editing_attributes(el.attrib.items())
         structure = etree.Element(el.tag, attrib=attributes)
         structure.text = el.text
         xpath.append(structure)
@@ -106,9 +131,11 @@ class IrUiView(models.Model):
                 self._copy_field_terms_translations(custom_snippet_view, 'arch_db', record, html_field)
 
     @api.model
-    def _copy_field_terms_translations(self, record_from, name_field_from, record_to, name_field_to):
-        """ Copy the terms translation from a record/field ``Model1.Field1``
-        to a (possibly) completely different record/field ``Model2.Field2``.
+    def _copy_field_terms_translations(self, records_from, name_field_from, record_to, name_field_to):
+        """ Copy model terms translations from ``records_from.name_field_from``
+        to ``record_to.name_field_to`` for all activated languages if the term
+        in ``record_to.name_field_to`` is untranslated (the term matches the
+        one in the current language).
 
         For instance, copy the translations of a
         ``product.template.html_description`` field to a ``ir.ui.view.arch_db``
@@ -120,11 +147,7 @@ class IrUiView(models.Model):
         record_to.check_access_rule('write')
         record_to.check_field_access_rights('write', [name_field_to])
 
-        # This will also implicitly check for `read` access rights
-        if not record_from[name_field_from] or not record_to[name_field_to]:
-            return
-
-        field_from = record_from._fields[name_field_from]
+        field_from = records_from._fields[name_field_from]
         field_to = record_to._fields[name_field_to]
         error_callable_msg = "'translate' property of field %r is not callable"
         if not callable(field_from.translate):
@@ -134,20 +157,31 @@ class IrUiView(models.Model):
         if not field_to.store:
             raise ValueError("Field %r is not stored" % field_to)
 
+        # This will also implicitly check for `read` access rights
+        if not record_to[name_field_to] or not any(records_from.mapped(name_field_from)):
+            return
+
         lang_env = self.env.lang or 'en_US'
         langs = set(lang for lang, _ in self.env['res.lang'].get_installed())
 
         # 1. Get translations
-        record_from.flush_model([name_field_from])
+        records_from.flush_model([name_field_from])
         existing_translation_dictionary = field_to.get_translation_dictionary(
             record_to[name_field_to],
             {lang: record_to.with_context(prefetch_langs=True, lang=lang)[name_field_to] for lang in langs if lang != lang_env}
         )
-        extra_translation_dictionary = field_from.get_translation_dictionary(
-            record_from[name_field_from],
-            {lang: record_from.with_context(prefetch_langs=True, lang=lang)[name_field_from] for lang in langs if lang != lang_env}
-        )
-        existing_translation_dictionary.update(extra_translation_dictionary)
+        extra_translation_dictionary = {}
+        for record_from in records_from:
+            extra_translation_dictionary.update(field_from.get_translation_dictionary(
+                record_from[name_field_from],
+                {lang: record_from.with_context(prefetch_langs=True, lang=lang)[name_field_from] for lang in langs if lang != lang_env}
+            ))
+        for term, extra_translation_values in extra_translation_dictionary.items():
+            existing_translation_values = existing_translation_dictionary.setdefault(term, {})
+            # Update only default translation values that aren't customized by the user.
+            for lang, extra_translation in extra_translation_values.items():
+                if existing_translation_values.get(lang, term) == term:
+                    existing_translation_values[lang] = extra_translation
         translation_dictionary = existing_translation_dictionary
 
         # The `en_US` jsonb value should always be set, even if english is not
@@ -186,7 +220,7 @@ class IrUiView(models.Model):
 
     @api.model
     def _get_allowed_root_attrs(self):
-        return ['style', 'class']
+        return ['style', 'class', 'target', 'href']
 
     def replace_arch_section(self, section_xpath, replacement, replace_tail=False):
         # the root of the arch section shouldn't actually be replaced as it's
@@ -206,6 +240,8 @@ class IrUiView(models.Model):
         for attribute in self._get_allowed_root_attrs():
             if attribute in replacement.attrib:
                 root.attrib[attribute] = replacement.attrib[attribute]
+            elif attribute in root.attrib:
+                del root.attrib[attribute]
 
         # Note: after a standard edition, the tail *must not* be replaced
         if replace_tail:
@@ -411,7 +447,14 @@ class IrUiView(models.Model):
         name = self._find_available_name(name, used_names)
 
         # html to xml to add '/' at the end of self closing tags like br, ...
-        xml_arch = etree.tostring(html.fromstring(arch), encoding='utf-8')
+        arch_tree = html.fromstring(arch)
+        attributes = self._get_cleaned_non_editing_attributes(arch_tree.attrib.items())
+        for attr in arch_tree.attrib:
+            if attr in attributes:
+                arch_tree.attrib[attr] = attributes[attr]
+            else:
+                del arch_tree.attrib[attr]
+        xml_arch = etree.tostring(arch_tree, encoding='utf-8')
         new_snippet_view_values = {
             'name': name,
             'key': full_snippet_key,

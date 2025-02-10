@@ -15,6 +15,8 @@ const modifierFields = [
     'originalSrc',
     'resizeWidth',
     'aspectRatio',
+    "bgSrc",
+    "mimetypeBeforeConversion",
 ];
 export const isGif = (mimetype) => mimetype === 'image/gif';
 
@@ -233,6 +235,8 @@ export async function applyModifications(img, dataOptions = {}) {
     // Crop
     const container = document.createElement('div');
     const original = await loadImage(originalSrc);
+    // loadImage may have ended up loading a different src (see: LOAD_IMAGE_404)
+    originalSrc = original.getAttribute('src');
     container.appendChild(original);
     await activateCropper(original, 0, data);
     let croppedImg = $(original).cropper('getCroppedCanvas', {width, height});
@@ -358,6 +362,7 @@ export function loadImage(src, img = new Image()) {
         img.src = source;
     };
     // The server will return a placeholder image with the following src.
+    // grep: LOAD_IMAGE_404
     const placeholderHref = "/web/image/__odoo__unknown__src__/";
 
     return new Promise((resolve, reject) => {
@@ -419,6 +424,8 @@ async function _updateImageData(src, key = 'objectURL') {
 }
 /**
  * Returns the size of a cached image.
+ * Warning: this supposes that the image is already in the cache, i.e. that
+ * _updateImageData was called before.
  *
  * @param {String} src used as a key on the image cache map.
  * @returns {Number} size of the image in bytes.
@@ -544,31 +551,6 @@ export function isImageSupportedForStyle(img) {
 
     return !isTFieldImg && !isEditableRootElement;
 }
-/**
- * @param {HTMLImageElement} img
- * @returns {Promise<Boolean>}
- */
-export async function isImageCorsProtected(img) {
-    const src = img.getAttribute('src');
-    if (!src) {
-        return false;
-    }
-    let isCorsProtected = false;
-    if (!src.startsWith("/") || /\/web\/image\/\d+-redirect\//.test(src)) {
-        // The `fetch()` used later in the code might fail if the image is
-        // CORS protected. We check upfront if it's the case.
-        // Two possible cases:
-        // 1. the `src` is an absolute URL from another domain.
-        //    For instance, abc.odoo.com vs abc.com which are actually the
-        //    same database behind.
-        // 2. A "attachment-url" which is just a redirect to the real image
-        //    which could be hosted on another website.
-        isCorsProtected = await fetch(src, {method: 'HEAD'})
-            .then(() => false)
-            .catch(() => true);
-    }
-    return isCorsProtected;
-}
 
 /**
  * @param {Blob} blob
@@ -593,7 +575,7 @@ export function getDataURLBinarySize(dataURL) {
     return dataURL.split(',')[1].length / 4 * 3;
 }
 
-export const removeOnImageChangeAttrs = [...cropperDataFields, ...modifierFields, 'aspectRatio'];
+export const removeOnImageChangeAttrs = [...cropperDataFields, ...modifierFields];
 
 export default {
     applyModifications,

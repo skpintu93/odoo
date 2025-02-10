@@ -6,6 +6,10 @@ from odoo import models, _
 SECTOR_RO_CODES = ('SECTOR1', 'SECTOR2', 'SECTOR3', 'SECTOR4', 'SECTOR5', 'SECTOR6')
 
 
+def get_formatted_sector_ro(city: str):
+    return city.upper().replace(' ', '')
+
+
 class AccountEdiXmlUBLRO(models.AbstractModel):
     _inherit = "account.edi.xml.ubl_bis3"
     _name = "account.edi.xml.ubl_ro"
@@ -20,6 +24,10 @@ class AccountEdiXmlUBLRO(models.AbstractModel):
 
         if partner.state_id:
             vals["country_subentity"] = partner.country_code + '-' + partner.state_id.code
+
+            # Romania requires the CityName to be in the format of "SECTORX" if the address state is in Bucharest.
+            if partner.state_id.code == 'B' and partner.city:
+                vals['city_name'] = get_formatted_sector_ro(partner.city)
 
         return vals
 
@@ -42,12 +50,10 @@ class AccountEdiXmlUBLRO(models.AbstractModel):
         vals_list = super()._get_partner_party_tax_scheme_vals_list(partner, role)
 
         if not partner.vat and partner.company_registry:
-            return [{
-                'company_id': partner.company_registry,
-                'tax_scheme_vals': {
-                    'id': 'VAT',
-                },
-            }]
+            # Use company_registry (Company ID) as the VAT replacement
+            for vals in vals_list:
+                tax_scheme_id = 'VAT' if partner.company_registry[:2].isalpha() else 'NOT_EU_VAT'
+                vals.update({'company_id': partner.company_registry, 'tax_scheme_vals': {'id': tax_scheme_id}})
 
         return vals_list
 
@@ -92,26 +98,21 @@ class AccountEdiXmlUBLRO(models.AbstractModel):
                 f"ciusro_{partner_type}_state_id_required": self._check_required_fields(partner, 'state_id'),
             })
 
-            if not partner.vat and not partner.company_registry:
+            if not partner.commercial_partner_id.vat and not partner.commercial_partner_id.company_registry:
                 constraints[f"ciusro_{partner_type}_tax_identifier_required"] = _(
                     "The following partner doesn't have a VAT nor Company ID: %s. "
                     "At least one of them is required. ",
-                    partner.name)
-
-            if (not partner.vat and partner.company_registry
-                    and not partner.company_registry.startswith(partner.country_code)):
-                constraints[f"ciusro_{partner_type}_country_code_company_registry_required"] = _(
-                    "The following partner's doesn't have a country code prefix in their Company ID: %s.",
-                    partner.name)
+                    partner.display_name)
 
             if (partner.country_code == 'RO'
                     and partner.state_id
                     and partner.state_id.code == 'B'
-                    and partner.city not in SECTOR_RO_CODES):
+                    and partner.city
+                    and get_formatted_sector_ro(partner.city) not in SECTOR_RO_CODES):
                 constraints[f"ciusro_{partner_type}_invalid_city_name"] = _(
                     "The following partner's city name is invalid: %s. "
                     "If partner's state is București, the city name must be 'SECTORX', "
                     "where X is a number between 1-6.",
-                    partner.name)
+                    partner.display_name)
 
         return constraints
